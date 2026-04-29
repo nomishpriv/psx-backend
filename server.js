@@ -37,10 +37,21 @@ app.use(cors({
     'http://127.0.0.1:3000',
     'https://blaspheme-scrawny-retaliate.ngrok-free.dev',
     'https://cheats-magnitude-max-winston.trycloudflare.com',
+    'https://mediumblue-newt-871904.hostingersite.com',
     /^https:\/\/.*\.ngrok-free\.dev$/
   ],
   credentials: true
 }));
+
+// ============ FIX: Map non-prefixed routes to /api for Hostinger ============
+app.use((req, res, next) => {
+  // If request doesn't start with /api, rewrite it
+  if (!req.path.startsWith('/api')) {
+    req.url = '/api' + req.url
+  }
+  next()
+})
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
