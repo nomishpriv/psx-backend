@@ -416,6 +416,20 @@ app.get("/api/psx/scan/bullish", async (req, res) => {
   }
 });
 
+// GET /api/psx/news/:symbol - Get news analysis for a symbol
+app.get("/api/psx/news/:symbol", async (req, res) => {
+  try {
+    const { fetchNewsForSymbol } = require("./services/psxService");
+    const { analyzeNewsForStock } = require("./services/newsAnalysisService");
+    const headlines = await fetchNewsForSymbol(req.params.symbol);
+    if (!headlines.length) return res.json({ success: true, headlines: [], analysis: null });
+    const analysis = await analyzeNewsForStock(req.params.symbol, headlines);
+    res.json({ success: true, headlines, analysis });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ============ EXISTING ROUTES ============
 
 // Routes

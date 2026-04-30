@@ -1,614 +1,271 @@
 const psxService = require("../services/psxService");
+const newsAnalysisService = require("../services/newsAnalysisService");
 
-/**
- * Get all stocks with intraday data and indicators
- */
+// ============ GET ALL STOCKS ============
 async function getAllStocks(req, res) {
   try {
     const data = await psxService.getAllStocksData();
-    
-    // Calculate market summary
-    const validStocks = data.filter(s => s.price !== null);
-    const avgChange = validStocks.length > 0
-      ? validStocks.reduce((sum, s) => sum + (s.changePercent || 0), 0) / validStocks.length
-      : 0;
-    
+    const valid = data.filter(s => s.price !== null);
+    const avgChange = valid.length ? valid.reduce((sum, s) => sum + (s.changePercent || 0), 0) / valid.length : 0;
+
     res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      marketSummary: {
-        totalStocks: data.length,
-        activeStocks: validStocks.length,
-        averageChange: avgChange,
-      },
-      data: data
+      success: true, timestamp: new Date().toISOString(),
+      marketSummary: { totalStocks: data.length, activeStocks: valid.length, averageChange: avgChange },
+      data
     });
   } catch (error) {
-    console.error("Error in getAllStocks:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch stocks data",
-      message: error.message
-    });
+    console.error("getAllStocks:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * Get single stock intraday data
- */
+// ============ GET SINGLE STOCK ============
 async function getSingleStock(req, res) {
   try {
-    const { symbol } = req.params;
-    
-    if (!symbol) {
-      return res.status(400).json({
-        success: false,
-        error: "Symbol parameter is required"
-      });
-    }
-    
-    const data = await psxService.getSingleStockData(symbol.toUpperCase());
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      data: data
-    });
+    const data = await psxService.getSingleStockData(req.params.symbol.toUpperCase());
+    res.json({ success: true, timestamp: new Date().toISOString(), data });
   } catch (error) {
-    console.error(`Error in getSingleStock for ${req.params.symbol}:`, error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch stock data",
-      message: error.message
-    });
+    console.error("getSingleStock:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * Get market overview
- */
+// ============ MARKET OVERVIEW ============
 async function getMarketOverview(req, res) {
   try {
-    const allData = await psxService.getAllStocksData();
-    
-    const validStocks = allData.filter(s => s.price !== null);
-    
-    const overview = {
-      totalVolume: validStocks.reduce((sum, s) => sum + (s.volume || 0), 0),
-      gainers: validStocks.filter(s => s.change > 0).length,
-      losers: validStocks.filter(s => s.change < 0).length,
-      unchanged: validStocks.filter(s => s.change === 0).length,
-      topGainers: validStocks
-        .sort((a, b) => (b.changePercent || 0) - (a.changePercent || 0))
-        .slice(0, 5)
-        .map(s => ({ symbol: s.symbol, change: s.changePercent })),
-      topLosers: validStocks
-        .sort((a, b) => (a.changePercent || 0) - (b.changePercent || 0))
-        .slice(0, 5)
-        .map(s => ({ symbol: s.symbol, change: s.changePercent })),
-      mostActive: validStocks
-        .sort((a, b) => (b.volume || 0) - (a.volume || 0))
-        .slice(0, 5)
-        .map(s => ({ symbol: s.symbol, volume: s.volume })),
-    };
-    
+    const all = await psxService.getAllStocksData();
+    const valid = all.filter(s => s.price);
     res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      data: overview
+      success: true, timestamp: new Date().toISOString(),
+      data: {
+        totalVolume: valid.reduce((sum, s) => sum + (s.volume || 0), 0),
+        gainers: valid.filter(s => s.change > 0).length,
+        losers: valid.filter(s => s.change < 0).length,
+        unchanged: valid.filter(s => s.change === 0).length,
+        topGainers: valid.sort((a, b) => (b.changePercent || 0) - (a.changePercent || 0)).slice(0, 5).map(s => ({ symbol: s.symbol, change: s.changePercent })),
+        topLosers: valid.sort((a, b) => (a.changePercent || 0) - (b.changePercent || 0)).slice(0, 5).map(s => ({ symbol: s.symbol, change: s.changePercent })),
+        mostActive: valid.sort((a, b) => (b.volume || 0) - (a.volume || 0)).slice(0, 5).map(s => ({ symbol: s.symbol, volume: s.volume }))
+      }
     });
   } catch (error) {
-    console.error("Error in getMarketOverview:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch market overview"
-    });
+    console.error("getMarketOverview:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-// ============ NEW ENDPOINTS FOR PREDICTABLE TRADING ============
-
-/**
- * GET /api/psx/enriched-stocks
- * Get stocks with confidence scores, risk levels, and session analysis
- */
-/**
- * GET /api/psx/enriched-stocks
- * Get stocks with confidence scores, risk levels, and session analysis
- */
+// ============ ENRICHED STOCKS ============
 async function getEnrichedStocks(req, res) {
   try {
     const stocks = await psxService.getAllStocksData();
-    
-    // Check if stocks data is valid
-    if (!stocks || stocks.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "No stock data available"
-      });
-    }
-    
-    const enrichedStocks = stocks
-      .filter(stock => !stock.error && stock.price)
-      .map(stock => ({
-        symbol: stock.symbol,
-        price: stock.price,
-        changePercent: stock.changePercent || 0,
-        volume: stock.volume || 0,
-        signal: stock.signal || 'NEUTRAL',
-        signalConfidence: stock.signalConfidence || 'Medium',
-        
-        // Confidence Score
-        confidence: stock.confidence || { score: 50, level: 'MEDIUM', action: 'MONITOR' },
-        
-        // Risk Management
-        riskLevels: stock.riskLevels || null,
-        
-        // Trade Recommendation
-        tradeRecommendation: stock.tradeRecommendation || null,
-        
-        // Current Session
-        currentSession: stock.currentSession || null,
-        sessionAdvice: stock.sessionAdvice || null,
-        
-        // Key Indicators
-        rsi: stock.rsi || null,
-        macdTrend: stock.macdTrend || null,
-        volumeRatio: stock.volumeRatio || 100,
-        bbPosition: stock.bbPosition || null,
-        vwapSignal: stock.vwapSignal || null,
-        
-        // 15-Min Trend
-        trend15Min: stock.trend15Min || 'NEUTRAL',
-        trendStrength15Min: stock.trendStrength15Min || 0,
-        entrySignal15Min: stock.entrySignal15Min || null,
-        exitSignal15Min: stock.exitSignal15Min || null,
-        
-        // Combined Signal
-        entrySignal: stock.entrySignal || null,
-        exitSignal: stock.exitSignal || null,
-        
-        // Position Sizing
-        positionSize: stock.positionSize || null,
-        
-        // Trailing Stop
-        trailingStop: stock.trailingStop || null
-      }));
-    
-    // Sort by confidence score (highest first)
-    const sortedStocks = enrichedStocks.sort((a, b) => 
-      (b.confidence?.score || 0) - (a.confidence?.score || 0)
-    );
-    
-    // Get current session info
-    const session = {
-      label: "Trading Session",
-      isMarketHours: true,
-      timestamp: new Date().toISOString()
-    };
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      session: session,
-      totalStocks: sortedStocks.length,
-      data: sortedStocks
-    });
+    if (!stocks?.length) return res.status(404).json({ success: false, error: "No data" });
+
+    const enriched = stocks.filter(s => s.price).map(s => ({
+      symbol: s.symbol, price: s.price, changePercent: s.changePercent || 0,
+      volume: s.volume || 0, signal: s.signal || 'NEUTRAL', signalConfidence: s.signalConfidence || 'Medium',
+      confidence: s.confidence || { score: 50, level: 'MEDIUM', action: 'MONITOR' },
+      riskLevels: s.riskLevels, tradeRecommendation: s.tradeRecommendation,
+      currentSession: s.currentSession, sessionAdvice: s.sessionAdvice,
+      rsi: s.rsi, macdTrend: s.macdTrend, volumeRatio: s.volumeRatio,
+      bbPosition: s.bbPosition, vwapSignal: s.vwapSignal,
+      trend15Min: s.trend15Min, trendStrength15Min: s.trendStrength15Min,
+      entrySignal15Min: s.entrySignal15Min, exitSignal15Min: s.exitSignal15Min,
+      entrySignal: s.entrySignal, exitSignal: s.exitSignal,
+      positionSize: s.positionSize, trailingStop: s.trailingStop,
+      newsImpact: s.newsImpact || null
+    })).sort((a, b) => (b.confidence?.score || 0) - (a.confidence?.score || 0));
+
+    res.json({ success: true, timestamp: new Date().toISOString(), totalStocks: enriched.length, data: enriched });
   } catch (error) {
-    console.error("Error in getEnrichedStocks:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error("getEnrichedStocks:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/top-opportunities
- * Get top 10 trading opportunities based on confidence
- */
+// ============ TOP OPPORTUNITIES ============
 async function getTopOpportunities(req, res) {
   try {
-    const { limit = 10 } = req.query;
-    const opportunities = await psxService.getTopOpportunities(parseInt(limit));
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      count: opportunities.length,
-      data: opportunities
-    });
+    const opportunities = await psxService.getTopOpportunities(parseInt(req.query.limit) || 10);
+    res.json({ success: true, timestamp: new Date().toISOString(), count: opportunities.length, data: opportunities });
   } catch (error) {
-    console.error("Error in getTopOpportunities:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error("getTopOpportunities:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/market-summary-enhanced
- * Get enhanced market summary with confidence metrics
- */
+// ============ MARKET SUMMARY ENHANCED ============
 async function getMarketSummaryEnhanced(req, res) {
   try {
     const summary = await psxService.getMarketSummary();
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      data: summary
-    });
+    res.json({ success: true, timestamp: new Date().toISOString(), data: summary });
   } catch (error) {
-    console.error("Error in getMarketSummaryEnhanced:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error("getMarketSummaryEnhanced:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/stock/:symbol/risk
- * Get risk levels for a specific stock
- */
+// ============ STOCK RISK LEVELS ============
 async function getStockRiskLevels(req, res) {
   try {
-    const { symbol } = req.params;
-    const stock = await psxService.getSingleStockData(symbol.toUpperCase());
-    
-    if (stock.error || !stock.price) {
-      return res.status(404).json({
-        success: false,
-        error: "Stock not found or no data available"
-      });
-    }
-    
-    res.json({
-      success: true,
-      symbol: stock.symbol,
-      price: stock.price,
-      riskLevels: stock.riskLevels,
-      positionSize: stock.positionSize,
-      trailingStop: stock.trailingStop,
-      tradeRecommendation: stock.tradeRecommendation
-    });
+    const stock = await psxService.getSingleStockData(req.params.symbol.toUpperCase());
+    if (stock.error || !stock.price) return res.status(404).json({ success: false, error: "Not found" });
+    res.json({ success: true, symbol: stock.symbol, price: stock.price, riskLevels: stock.riskLevels, positionSize: stock.positionSize, trailingStop: stock.trailingStop, tradeRecommendation: stock.tradeRecommendation });
   } catch (error) {
-    console.error(`Error in getStockRiskLevels for ${req.params.symbol}:`, error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/stock/:symbol/fibonacci
- * Get Fibonacci levels for a specific stock
- */
+// ============ STOCK FIBONACCI ============
 async function getStockFibonacci(req, res) {
   try {
-    const { symbol } = req.params;
-    const stock = await psxService.getSingleStockData(symbol.toUpperCase());
-    
-    if (stock.error || !stock.price) {
-      return res.status(404).json({
-        success: false,
-        error: "Stock not found or no data available"
-      });
-    }
-    
-    res.json({
-      success: true,
-      symbol: stock.symbol,
-      price: stock.price,
-      fibonacci: stock.fibonacci
-    });
+    const stock = await psxService.getSingleStockData(req.params.symbol.toUpperCase());
+    if (stock.error || !stock.price) return res.status(404).json({ success: false, error: "Not found" });
+    res.json({ success: true, symbol: stock.symbol, price: stock.price, fibonacci: stock.fibonacci });
   } catch (error) {
-    console.error(`Error in getStockFibonacci for ${req.params.symbol}:`, error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/stock/:symbol/support-resistance
- * Get support and resistance levels for a specific stock
- */
+// ============ STOCK SUPPORT/RESISTANCE ============
 async function getStockSupportResistance(req, res) {
   try {
-    const { symbol } = req.params;
-    const stock = await psxService.getSingleStockData(symbol.toUpperCase());
-    
-    if (stock.error || !stock.price) {
-      return res.status(404).json({
-        success: false,
-        error: "Stock not found or no data available"
-      });
-    }
-    
-    res.json({
-      success: true,
-      symbol: stock.symbol,
-      price: stock.price,
-      supportResistance: stock.supportResistance
-    });
+    const stock = await psxService.getSingleStockData(req.params.symbol.toUpperCase());
+    if (stock.error || !stock.price) return res.status(404).json({ success: false, error: "Not found" });
+    res.json({ success: true, symbol: stock.symbol, price: stock.price, supportResistance: stock.supportResistance });
   } catch (error) {
-    console.error(`Error in getStockSupportResistance for ${req.params.symbol}:`, error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/stock/:symbol/session
- * Get session advice for a specific stock
- */
+// ============ STOCK SESSION ============
 async function getStockSessionAdvice(req, res) {
   try {
-    const { symbol } = req.params;
-    const stock = await psxService.getSingleStockData(symbol.toUpperCase());
-    
-    if (stock.error || !stock.price) {
-      return res.status(404).json({
-        success: false,
-        error: "Stock not found or no data available"
-      });
-    }
-    
-    res.json({
-      success: true,
-      symbol: stock.symbol,
-      currentSession: stock.currentSession,
-      sessionAdvice: stock.sessionAdvice,
-      tradeRecommendation: stock.tradeRecommendation
-    });
+    const stock = await psxService.getSingleStockData(req.params.symbol.toUpperCase());
+    if (stock.error || !stock.price) return res.status(404).json({ success: false, error: "Not found" });
+    res.json({ success: true, symbol: stock.symbol, currentSession: stock.currentSession, sessionAdvice: stock.sessionAdvice, tradeRecommendation: stock.tradeRecommendation });
   } catch (error) {
-    console.error(`Error in getStockSessionAdvice for ${req.params.symbol}:`, error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/scan/bullish
- * Scan for bullish setups
- */
+// ============ NEWS ============
+async function getStockNews(req, res) {
+  try {
+    const { symbol } = req.params;
+    const headlines = await psxService.fetchNewsForSymbol(symbol.toUpperCase());
+    let analysis = null;
+    if (headlines.length) {
+      analysis = await newsAnalysisService.analyzeNewsForStock(symbol.toUpperCase(), headlines);
+    }
+    res.json({ success: true, symbol: symbol.toUpperCase(), headlines, analysis });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function getGeneralNews(req, res) {
+  try {
+    const news = await psxService.analyzeGeneralNewsImpact();
+    res.json({ success: true, count: news.length, data: news });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+// ============ SCAN BULLISH ============
 async function scanBullish(req, res) {
   try {
     const stocks = await psxService.getAllStocksData();
-    
-    const bullishSetups = stocks.filter(stock => {
-      if (stock.error || !stock.price) return false;
-      
-      const conditions = {
-        priceAboveEMA20: stock.pctFromEma20 > 0,
-        priceAboveVWAP: stock.vwapSignal === 'Bullish',
-        rsiBullish: stock.rsi > 40 && stock.rsi < 70,
-        macdBullish: stock.macdTrend === 'Bullish',
-        volumeConfirmed: stock.volumeRatio > 120,
-        trendBullish: stock.trend15Min === 'BULLISH' || stock.trend15Min === 'SLIGHTLY_BULLISH',
-        confidenceHigh: stock.confidence?.score >= 60
+    const bullish = stocks.filter(s => {
+      if (s.error || !s.price) return false;
+      const c = {
+        aboveEMA20: s.pctFromEma20 > 0, aboveVWAP: s.vwapSignal === 'Bullish',
+        rsiOk: s.rsi > 40 && s.rsi < 70, macdBullish: s.macdTrend === 'Bullish',
+        volumeOk: s.volumeRatio > 120, trendOk: s.trend15Min === 'BULLISH' || s.trend15Min === 'SLIGHTLY_BULLISH',
+        confidenceOk: s.confidence?.score >= 60
       };
-      
-      const bullishScore = Object.values(conditions).filter(Boolean).length;
-      
-      return bullishScore >= 4;
-    }).map(stock => ({
-      symbol: stock.symbol,
-      price: stock.price,
-      changePercent: stock.changePercent,
-      confidence: stock.confidence?.score,
-      signal: stock.signal,
-      trend15Min: stock.trend15Min,
-      entrySignal: stock.entrySignal,
-      conditions: {
-        priceAboveEMA20: stock.pctFromEma20 > 0,
-        priceAboveVWAP: stock.vwapSignal === 'Bullish',
-        rsiBullish: stock.rsi > 40 && stock.rsi < 70,
-        macdBullish: stock.macdTrend === 'Bullish',
-        volumeConfirmed: stock.volumeRatio > 120,
-        trendBullish: stock.trend15Min === 'BULLISH' || stock.trend15Min === 'SLIGHTLY_BULLISH'
-      }
-    }));
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      count: bullishSetups.length,
-      data: bullishSetups.sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-    });
+      return Object.values(c).filter(Boolean).length >= 4;
+    }).map(s => ({
+      symbol: s.symbol, price: s.price, changePercent: s.changePercent,
+      confidence: s.confidence?.score, signal: s.signal, trend15Min: s.trend15Min,
+      entrySignal: s.entrySignal, newsImpact: s.newsImpact?.sentiment,
+      conditions: { aboveEMA20: s.pctFromEma20 > 0, aboveVWAP: s.vwapSignal === 'Bullish', rsiOk: s.rsi > 40 && s.rsi < 70, macdBullish: s.macdTrend === 'Bullish', volumeOk: s.volumeRatio > 120, trendOk: s.trend15Min === 'BULLISH' || s.trend15Min === 'SLIGHTLY_BULLISH' }
+    })).sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+
+    res.json({ success: true, timestamp: new Date().toISOString(), count: bullish.length, data: bullish });
   } catch (error) {
-    console.error("Error in scanBullish:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/scan/bearish
- * Scan for bearish setups
- */
+// ============ SCAN BEARISH ============
 async function scanBearish(req, res) {
   try {
     const stocks = await psxService.getAllStocksData();
-    
-    const bearishSetups = stocks.filter(stock => {
-      if (stock.error || !stock.price) return false;
-      
-      const conditions = {
-        priceBelowEMA20: stock.pctFromEma20 < 0,
-        priceBelowVWAP: stock.vwapSignal === 'Bearish',
-        rsiBearish: stock.rsi > 30 && stock.rsi < 60,
-        macdBearish: stock.macdTrend === 'Bearish',
-        volumeConfirmed: stock.volumeRatio > 120,
-        trendBearish: stock.trend15Min === 'BEARISH' || stock.trend15Min === 'SLIGHTLY_BEARISH',
-        confidenceHigh: stock.confidence?.score >= 60
+    const bearish = stocks.filter(s => {
+      if (s.error || !s.price) return false;
+      const c = {
+        belowEMA20: s.pctFromEma20 < 0, belowVWAP: s.vwapSignal === 'Bearish',
+        rsiOk: s.rsi > 30 && s.rsi < 60, macdBearish: s.macdTrend === 'Bearish',
+        volumeOk: s.volumeRatio > 120, trendOk: s.trend15Min === 'BEARISH' || s.trend15Min === 'SLIGHTLY_BEARISH',
+        confidenceOk: s.confidence?.score >= 60
       };
-      
-      const bearishScore = Object.values(conditions).filter(Boolean).length;
-      
-      return bearishScore >= 4;
-    }).map(stock => ({
-      symbol: stock.symbol,
-      price: stock.price,
-      changePercent: stock.changePercent,
-      confidence: stock.confidence?.score,
-      signal: stock.signal,
-      trend15Min: stock.trend15Min,
-      exitSignal: stock.exitSignal,
-      conditions: {
-        priceBelowEMA20: stock.pctFromEma20 < 0,
-        priceBelowVWAP: stock.vwapSignal === 'Bearish',
-        rsiBearish: stock.rsi > 30 && stock.rsi < 60,
-        macdBearish: stock.macdTrend === 'Bearish',
-        volumeConfirmed: stock.volumeRatio > 120,
-        trendBearish: stock.trend15Min === 'BEARISH' || stock.trend15Min === 'SLIGHTLY_BEARISH'
-      }
-    }));
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      count: bearishSetups.length,
-      data: bearishSetups.sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-    });
+      return Object.values(c).filter(Boolean).length >= 4;
+    }).map(s => ({
+      symbol: s.symbol, price: s.price, changePercent: s.changePercent,
+      confidence: s.confidence?.score, signal: s.signal, trend15Min: s.trend15Min,
+      exitSignal: s.exitSignal, newsImpact: s.newsImpact?.sentiment,
+      conditions: { belowEMA20: s.pctFromEma20 < 0, belowVWAP: s.vwapSignal === 'Bearish', rsiOk: s.rsi > 30 && s.rsi < 60, macdBearish: s.macdTrend === 'Bearish', volumeOk: s.volumeRatio > 120, trendOk: s.trend15Min === 'BEARISH' || s.trend15Min === 'SLIGHTLY_BEARISH' }
+    })).sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+
+    res.json({ success: true, timestamp: new Date().toISOString(), count: bearish.length, data: bearish });
   } catch (error) {
-    console.error("Error in scanBearish:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/scan/oversold
- * Scan for oversold bounce candidates
- */
+// ============ SCAN OVERSOLD ============
 async function scanOversold(req, res) {
   try {
     const stocks = await psxService.getAllStocksData();
-    
-    const oversoldSetups = stocks.filter(stock => {
-      if (stock.error || !stock.price) return false;
-      
-      return (stock.rsi < 35 || stock.bbPosition < 25) && 
-             stock.volumeRatio > 120 &&
-             stock.trend15Min !== 'BEARISH';
-    }).map(stock => ({
-      symbol: stock.symbol,
-      price: stock.price,
-      changePercent: stock.changePercent,
-      rsi: stock.rsi,
-      bbPosition: stock.bbPosition,
-      volumeRatio: stock.volumeRatio,
-      confidence: stock.confidence?.score,
-      entrySignal: stock.entrySignal15Min || "Oversold bounce potential"
-    }));
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      count: oversoldSetups.length,
-      data: oversoldSetups.sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-    });
+    const oversold = stocks.filter(s => !s.error && s.price && (s.rsi < 35 || s.bbPosition < 25) && s.volumeRatio > 120 && s.trend15Min !== 'BEARISH')
+      .map(s => ({ symbol: s.symbol, price: s.price, changePercent: s.changePercent, rsi: s.rsi, bbPosition: s.bbPosition, volumeRatio: s.volumeRatio, confidence: s.confidence?.score, entrySignal: s.entrySignal15Min || "Oversold bounce", newsImpact: s.newsImpact?.sentiment }))
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+
+    res.json({ success: true, timestamp: new Date().toISOString(), count: oversold.length, data: oversold });
   } catch (error) {
-    console.error("Error in scanOversold:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * GET /api/psx/scan/overbought
- * Scan for overbought pullback candidates
- */
+// ============ SCAN OVERBOUGHT ============
 async function scanOverbought(req, res) {
   try {
     const stocks = await psxService.getAllStocksData();
-    
-    const overboughtSetups = stocks.filter(stock => {
-      if (stock.error || !stock.price) return false;
-      
-      return (stock.rsi > 65 || stock.bbPosition > 75) && 
-             stock.volumeRatio > 120 &&
-             stock.trend15Min !== 'BULLISH';
-    }).map(stock => ({
-      symbol: stock.symbol,
-      price: stock.price,
-      changePercent: stock.changePercent,
-      rsi: stock.rsi,
-      bbPosition: stock.bbPosition,
-      volumeRatio: stock.volumeRatio,
-      confidence: stock.confidence?.score,
-      exitSignal: stock.exitSignal15Min || "Overbought - pullback expected"
-    }));
-    
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      count: overboughtSetups.length,
-      data: overboughtSetups.sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-    });
+    const overbought = stocks.filter(s => !s.error && s.price && (s.rsi > 65 || s.bbPosition > 75) && s.volumeRatio > 120 && s.trend15Min !== 'BULLISH')
+      .map(s => ({ symbol: s.symbol, price: s.price, changePercent: s.changePercent, rsi: s.rsi, bbPosition: s.bbPosition, volumeRatio: s.volumeRatio, confidence: s.confidence?.score, exitSignal: s.exitSignal15Min || "Overbought pullback", newsImpact: s.newsImpact?.sentiment }))
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+
+    res.json({ success: true, timestamp: new Date().toISOString(), count: overbought.length, data: overbought });
   } catch (error) {
-    console.error("Error in scanOverbought:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
-/**
- * POST /api/psx/cache/clear
- * Clear all cached data
- */
+// ============ CLEAR CACHE ============
 async function clearCache(req, res) {
   try {
     psxService.clearCache();
-    res.json({
-      success: true,
-      message: "Cache cleared successfully",
-      timestamp: new Date().toISOString()
-    });
+    res.json({ success: true, message: "Cache cleared", timestamp: new Date().toISOString() });
   } catch (error) {
-    console.error("Error in clearCache:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
 
 module.exports = {
-  // Existing
-  getAllStocks,
-  getSingleStock,
-  getMarketOverview,
-  
-  // New endpoints
-  getEnrichedStocks,
-  getTopOpportunities,
-  getMarketSummaryEnhanced,
-  getStockRiskLevels,
-  getStockFibonacci,
-  getStockSupportResistance,
-  getStockSessionAdvice,
-  scanBullish,
-  scanBearish,
-  scanOversold,
-  scanOverbought,
+  getAllStocks, getSingleStock, getMarketOverview,
+  getEnrichedStocks, getTopOpportunities, getMarketSummaryEnhanced,
+  getStockRiskLevels, getStockFibonacci, getStockSupportResistance, getStockSessionAdvice,
+  getStockNews, getGeneralNews,
+  scanBullish, scanBearish, scanOversold, scanOverbought,
   clearCache
 };
