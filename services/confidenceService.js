@@ -1,364 +1,151 @@
 /**
  * Confidence Score Service
  * Combines multiple indicators into a single 0-100 confidence score
+ * OPTIMIZED: Reduced branching, precomputed thresholds, faster math
  */
 
-/**
- * Calculate overall confidence score for a stock
- */
-function calculateConfidence(stock) {
-  let score = 50; // Neutral base
+// Precomputed constants
+const BASE_SCORE = 50;
+const WEIGHTS = { trend: 0.3, momentum: 0.3, volume: 0.2, volatility: 0.1, strength: 0.1 };
+const LEVELS = [
+  { min: 75, level: 'VERY_HIGH', action: 'STRONG_BUY', color: '#10b981' },
+  { min: 65, level: 'HIGH', action: 'BUY', color: '#22c55e' },
+  { min: 55, level: 'MEDIUM_HIGH', action: 'CONSIDER', color: '#84cc16' },
+  { min: 45, level: 'MEDIUM', action: 'MONITOR', color: '#eab308' },
+  { min: 35, level: 'MEDIUM_LOW', action: 'CAUTION', color: '#f97316' },
+  { min: 25, level: 'LOW', action: 'AVOID', color: '#ef4444' },
+];
+const VERY_LOW = { level: 'VERY_LOW', action: 'STRONG_AVOID', color: '#dc2626' };
+
+function n(v, fallback = 0) {
+  return (typeof v === 'number' && !isNaN(v)) ? v : fallback;
+}
+
+function calculateConfidence(stock = {}) {
   const reasons = [];
-  
-  // Safely extract values with null checks and defaults
-  const {
-    symbol = 'UNKNOWN',
-    price = 0,
-    signal = 'NEUTRAL',
-    rsi = 50,
-    macdTrend = 'NEUTRAL',
-    volumeRatio = 100,
-    bbPosition = 50,
-    bbSignal = 'Neutral',
-    stochSignal = 'Neutral',
-    vwapSignal = 'Neutral',
-    adx = 20,
-    ema9 = price,
-    ema20 = price,
-    vwap = price,
-    pctFromEma9 = 0,
-    pctFromEma20 = 0,
-    pctFromVWAP = 0
-  } = stock || {};
-  
-  // Ensure numeric values are valid numbers
-  const safePrice = (typeof price === 'number' && !isNaN(price)) ? price : 0;
-  const safeRsi = (typeof rsi === 'number' && !isNaN(rsi)) ? rsi : 50;
-  const safeVolumeRatio = (typeof volumeRatio === 'number' && !isNaN(volumeRatio)) ? volumeRatio : 100;
-  const safeBbPosition = (typeof bbPosition === 'number' && !isNaN(bbPosition)) ? bbPosition : 50;
-  const safeAdx = (typeof adx === 'number' && !isNaN(adx)) ? adx : 20;
-  const safeEma9 = (typeof ema9 === 'number' && !isNaN(ema9)) ? ema9 : safePrice;
-  const safeEma20 = (typeof ema20 === 'number' && !isNaN(ema20)) ? ema20 : safePrice;
-  const safeVwap = (typeof vwap === 'number' && !isNaN(vwap)) ? vwap : safePrice;
-  
-  // ============ TREND SCORE (max 25 points) ============
-  let trendScore = 0;
-  
-  // Price vs EMAs
-  if (safePrice > safeEma9 && safePrice > safeEma20) {
-    trendScore += 10;
-    reasons.push("Price above key EMAs (+10)");
-  } else if (safePrice < safeEma9 && safePrice < safeEma20) {
-    trendScore -= 10;
-    reasons.push("Price below key EMAs (-10)");
+  const price = n(stock.price);
+  const rsi = n(stock.rsi, 50);
+  const volRatio = n(stock.volumeRatio, 100);
+  const bbPos = n(stock.bbPosition, 50);
+  const adx = n(stock.adx, 20);
+  const ema9 = n(stock.ema9, price);
+  const ema20 = n(stock.ema20, price);
+  const signal = stock.signal || 'NEUTRAL';
+
+  // Trend (max ±25)
+  let trend = 0;
+  if (price > ema9 && price > ema20) { trend += 10; reasons.push('Price above EMAs (+10)'); }
+  else if (price < ema9 && price < ema20) { trend -= 10; reasons.push('Price below EMAs (-10)'); }
+  if (ema9 > ema20) { trend += 8; reasons.push('EMA9 > EMA20 (+8)'); }
+  else { trend -= 8; reasons.push('EMA9 < EMA20 (-8)'); }
+  if (stock.vwapSignal === 'Bullish') { trend += 7; reasons.push('Above VWAP (+7)'); }
+  else if (stock.vwapSignal === 'Bearish') { trend -= 7; reasons.push('Below VWAP (-7)'); }
+
+  // Momentum (max ±25)
+  let momentum = 0;
+  if (rsi < 30) { momentum += 12; reasons.push(`Oversold RSI(${rsi.toFixed(1)}) (+12)`); }
+  else if (rsi > 70) { momentum -= 12; reasons.push(`Overbought RSI(${rsi.toFixed(1)}) (-12)`); }
+  else if (rsi > 40 && rsi < 60) { momentum += 5; reasons.push(`Neutral RSI(+5)`); }
+  if (stock.macdTrend === 'Bullish') { momentum += 8; reasons.push('MACD Bullish (+8)'); }
+  else if (stock.macdTrend === 'Bearish') { momentum -= 8; reasons.push('MACD Bearish (-8)'); }
+  const stoch = stock.stochSignal;
+  if (stoch === 'Oversold') { momentum += 5; reasons.push('Stoch Oversold (+5)'); }
+  else if (stoch === 'Overbought') { momentum -= 5; reasons.push('Stoch Overbought (-5)'); }
+  else if (stoch === 'Bullish') { momentum += 3; reasons.push('Stoch Bullish (+3)'); }
+
+  // Volume (max ±20)
+  let volume = 0;
+  if (volRatio > 150) { volume += 15; reasons.push(`Vol spike(${volRatio.toFixed(0)}%) (+15)`); }
+  else if (volRatio > 120) { volume += 10; reasons.push(`High vol(${volRatio.toFixed(0)}%) (+10)`); }
+  else if (volRatio > 80) { volume += 5; reasons.push(`Normal vol(+5)`); }
+  else if (volRatio < 50) { volume -= 10; reasons.push(`Very low vol(-10)`); }
+  else if (volRatio < 80) { volume -= 5; reasons.push(`Low vol(-5)`); }
+  if (volRatio > 120 && price > ema20) { volume += 5; reasons.push('Vol confirms uptrend (+5)'); }
+  else if (volRatio > 120 && price < ema20) { volume -= 5; reasons.push('Vol confirms downtrend (-5)'); }
+
+  // Volatility (max ±15)
+  let volatility = 0;
+  if (bbPos < 20) { volatility += 8; reasons.push(`Lower BB(${bbPos.toFixed(0)}%) (+8)`); }
+  else if (bbPos > 80) { volatility -= 8; reasons.push(`Upper BB(${bbPos.toFixed(0)}%) (-8)`); }
+  else if (bbPos > 40 && bbPos < 60) { volatility += 3; reasons.push(`Mid BB(+3)`); }
+  const bbSig = stock.bbSignal;
+  if (bbSig === 'Buy') { volatility += 7; reasons.push('BB Buy (+7)'); }
+  else if (bbSig === 'Sell') { volatility -= 7; reasons.push('BB Sell (-7)'); }
+
+  // Strength (max ±15)
+  let strength = 0;
+  if (adx > 25) {
+    if (trend > 0) { strength += 10; reasons.push(`Strong uptrend ADX(${adx.toFixed(1)}) (+10)`); }
+    else { strength -= 10; reasons.push(`Strong downtrend ADX(${adx.toFixed(1)}) (-10)`); }
+  } else if (adx < 20) {
+    strength += 5; reasons.push(`Weak trend ADX(+5)`);
   }
-  
-  // EMA alignment
-  if (safeEma9 > safeEma20) {
-    trendScore += 8;
-    reasons.push("EMA9 above EMA20 (+8)");
-  } else {
-    trendScore -= 8;
-    reasons.push("EMA9 below EMA20 (-8)");
-  }
-  
-  // VWAP position
-  if (vwapSignal === 'Bullish') {
-    trendScore += 7;
-    reasons.push("Above VWAP (+7)");
-  } else if (vwapSignal === 'Bearish') {
-    trendScore -= 7;
-    reasons.push("Below VWAP (-7)");
-  }
-  
-  // ============ MOMENTUM SCORE (max 25 points) ============
-  let momentumScore = 0;
-  
-  // RSI
-  if (safeRsi < 30) {
-    momentumScore += 12;
-    reasons.push(`Oversold RSI (${safeRsi.toFixed(1)}) - Bounce potential (+12)`);
-  } else if (safeRsi > 70) {
-    momentumScore -= 12;
-    reasons.push(`Overbought RSI (${safeRsi.toFixed(1)}) - Pullback risk (-12)`);
-  } else if (safeRsi > 40 && safeRsi < 60) {
-    momentumScore += 5;
-    reasons.push(`Neutral RSI (${safeRsi.toFixed(1)}) - Room to move (+5)`);
-  }
-  
-  // MACD trend
-  if (macdTrend === 'Bullish') {
-    momentumScore += 8;
-    reasons.push("Bullish MACD (+8)");
-  } else if (macdTrend === 'Bearish') {
-    momentumScore -= 8;
-    reasons.push("Bearish MACD (-8)");
-  }
-  
-  // Stochastic
-  if (stochSignal === 'Oversold') {
-    momentumScore += 5;
-    reasons.push("Stochastic oversold (+5)");
-  } else if (stochSignal === 'Overbought') {
-    momentumScore -= 5;
-    reasons.push("Stochastic overbought (-5)");
-  } else if (stochSignal === 'Bullish') {
-    momentumScore += 3;
-    reasons.push("Stochastic bullish crossover (+3)");
-  }
-  
-  // ============ VOLUME CONFIRMATION (max 20 points) ============
-  let volumeScore = 0;
-  
-  if (safeVolumeRatio > 150) {
-    volumeScore += 15;
-    reasons.push(`Very high volume (${safeVolumeRatio.toFixed(0)}% of avg) (+15)`);
-  } else if (safeVolumeRatio > 120) {
-    volumeScore += 10;
-    reasons.push(`High volume (${safeVolumeRatio.toFixed(0)}% of avg) (+10)`);
-  } else if (safeVolumeRatio > 80) {
-    volumeScore += 5;
-    reasons.push(`Normal volume (${safeVolumeRatio.toFixed(0)}% of avg) (+5)`);
-  } else if (safeVolumeRatio < 50) {
-    volumeScore -= 10;
-    reasons.push(`Very low volume (${safeVolumeRatio.toFixed(0)}% of avg) (-10)`);
-  } else if (safeVolumeRatio < 80) {
-    volumeScore -= 5;
-    reasons.push(`Low volume (${safeVolumeRatio.toFixed(0)}% of avg) (-5)`);
-  }
-  
-  // Volume + Price action confirmation
-  if (safeVolumeRatio > 120 && safePrice > safeEma20) {
-    volumeScore += 5;
-    reasons.push("Volume confirms uptrend (+5)");
-  } else if (safeVolumeRatio > 120 && safePrice < safeEma20) {
-    volumeScore -= 5;
-    reasons.push("Volume confirms downtrend (-5)");
-  }
-  
-  // ============ VOLATILITY & BREAKOUT (max 15 points) ============
-  let volatilityScore = 0;
-  
-  // Bollinger Band position
-  if (safeBbPosition < 20) {
-    volatilityScore += 8;
-    reasons.push(`Near lower BB (${safeBbPosition.toFixed(0)}%) - Support zone (+8)`);
-  } else if (safeBbPosition > 80) {
-    volatilityScore -= 8;
-    reasons.push(`Near upper BB (${safeBbPosition.toFixed(0)}%) - Resistance zone (-8)`);
-  } else if (safeBbPosition > 40 && safeBbPosition < 60) {
-    volatilityScore += 3;
-    reasons.push(`Mid-BB (${safeBbPosition.toFixed(0)}%) - Neutral (+3)`);
-  }
-  
-  // Bollinger signal
-  if (bbSignal === 'Buy') {
-    volatilityScore += 7;
-    reasons.push("Bollinger Buy signal (+7)");
-  } else if (bbSignal === 'Sell') {
-    volatilityScore -= 7;
-    reasons.push("Bollinger Sell signal (-7)");
-  }
-  
-  // ============ TREND STRENGTH (max 15 points) ============
-  let strengthScore = 0;
-  
-  if (safeAdx > 25) {
-    if (trendScore > 0) {
-      strengthScore += 10;
-      reasons.push(`Strong uptrend (ADX: ${safeAdx.toFixed(1)}) (+10)`);
-    } else if (trendScore < 0) {
-      strengthScore -= 10;
-      reasons.push(`Strong downtrend (ADX: ${safeAdx.toFixed(1)}) (-10)`);
-    }
-  } else if (safeAdx < 20) {
-    strengthScore += 5;
-    reasons.push(`Weak trend (ADX: ${safeAdx.toFixed(1)}) - Range bound (+5)`);
-  }
-  
-  // ============ FINAL SCORE CALCULATION ============
-  let totalScore = 50 + 
-    (trendScore * 0.3) + 
-    (momentumScore * 0.3) + 
-    (volumeScore * 0.2) + 
-    (volatilityScore * 0.1) + 
-    (strengthScore * 0.1);
-  
-  // Ensure score is between 0 and 100
-  totalScore = Math.min(100, Math.max(0, totalScore));
-  
-  // Determine confidence level and action
-  let level = 'LOW';
-  let action = 'AVOID';
-  let color = '#ef4444';
-  
-  if (totalScore >= 75) {
-    level = 'VERY_HIGH';
-    action = 'STRONG_BUY';
-    color = '#10b981';
-  } else if (totalScore >= 65) {
-    level = 'HIGH';
-    action = 'BUY';
-    color = '#22c55e';
-  } else if (totalScore >= 55) {
-    level = 'MEDIUM_HIGH';
-    action = 'CONSIDER';
-    color = '#84cc16';
-  } else if (totalScore >= 45) {
-    level = 'MEDIUM';
-    action = 'MONITOR';
-    color = '#eab308';
-  } else if (totalScore >= 35) {
-    level = 'MEDIUM_LOW';
-    action = 'CAUTION';
-    color = '#f97316';
-  } else if (totalScore >= 25) {
-    level = 'LOW';
-    action = 'AVOID';
-    color = '#ef4444';
-  } else {
-    level = 'VERY_LOW';
-    action = 'STRONG_AVOID';
-    color = '#dc2626';
-  }
-  
-  // Add recommendation based on signal
-  let recommendation = action;
-  if (signal === 'BUY' && totalScore > 60) {
-    recommendation = 'STRONG_BUY - Technical + Confidence';
-  } else if (signal === 'SELL' && totalScore < 40) {
-    recommendation = 'STRONG_SELL - Technical + Confidence';
-  } else if (signal === 'BUY' && totalScore < 40) {
-    recommendation = 'CAUTION - Buy signal but low confidence';
-  } else if (signal === 'SELL' && totalScore > 60) {
-    recommendation = 'CAUTION - Sell signal but high confidence';
-  }
-  
+
+  // Final score
+  const raw = BASE_SCORE + trend * WEIGHTS.trend + momentum * WEIGHTS.momentum + volume * WEIGHTS.volume + volatility * WEIGHTS.volatility + strength * WEIGHTS.strength;
+  const score = Math.round(Math.min(100, Math.max(0, raw)));
+
+  // Level lookup
+  let levelInfo = VERY_LOW;
+  for (const l of LEVELS) { if (score >= l.min) { levelInfo = l; break; } }
+
+  // Recommendation
+  let recommendation = levelInfo.action;
+  if (signal === 'BUY' && score > 60) recommendation = 'STRONG_BUY - Technical + Confidence';
+  else if (signal === 'SELL' && score < 40) recommendation = 'STRONG_SELL - Technical + Confidence';
+  else if (signal === 'BUY' && score < 40) recommendation = 'CAUTION - Buy signal, low confidence';
+  else if (signal === 'SELL' && score > 60) recommendation = 'CAUTION - Sell signal, high confidence';
+
   return {
-    score: Math.round(totalScore),
-    level,
-    action,
-    color,
+    score,
+    level: levelInfo.level,
+    action: levelInfo.action,
+    color: levelInfo.color,
     recommendation,
     breakdown: {
-      trend: Math.round(trendScore),
-      momentum: Math.round(momentumScore),
-      volume: Math.round(volumeScore),
-      volatility: Math.round(volatilityScore),
-      strength: Math.round(strengthScore)
+      trend: Math.round(trend),
+      momentum: Math.round(momentum),
+      volume: Math.round(volume),
+      volatility: Math.round(volatility),
+      strength: Math.round(strength)
     },
     reasons: reasons.slice(0, 5),
     timestamp: new Date().toISOString()
   };
 }
 
-/**
- * Generate real-time alerts based on confidence changes
- */
+// ============ ALERTS (simplified) ============
 function generateAlerts(stocks) {
   const alerts = [];
-  
-  stocks.forEach(stock => {
-    if (!stock) return;
-    
+  if (!stocks?.length) return alerts;
+
+  for (const stock of stocks) {
+    if (!stock) continue;
     const confidence = calculateConfidence(stock);
-    const safeRsi = (typeof stock.rsi === 'number' && !isNaN(stock.rsi)) ? stock.rsi : 50;
-    const safeVolumeRatio = (typeof stock.volumeRatio === 'number' && !isNaN(stock.volumeRatio)) ? stock.volumeRatio : 100;
-    const safeBbPosition = (typeof stock.bbPosition === 'number' && !isNaN(stock.bbPosition)) ? stock.bbPosition : 50;
-    
-    // High confidence buy alert
-    if (confidence.score >= 70 && confidence.action === 'BUY') {
-      alerts.push({
-        type: 'BUY',
-        symbol: stock.symbol,
-        price: stock.price,
-        confidence: confidence.score,
-        message: `${stock.symbol} - Strong buy signal with ${confidence.score}% confidence`,
-        timestamp: new Date().toISOString(),
-        priority: 'HIGH'
-      });
-    }
-    
-    // Oversold bounce alert
-    if (safeRsi < 30 && safeVolumeRatio > 120) {
-      alerts.push({
-        type: 'OVERSOLD_BOUNCE',
-        symbol: stock.symbol,
-        price: stock.price,
-        rsi: safeRsi,
-        volumeRatio: safeVolumeRatio,
-        message: `${stock.symbol} - Oversold (RSI: ${safeRsi.toFixed(1)}) with high volume - Possible bounce`,
-        timestamp: new Date().toISOString(),
-        priority: 'MEDIUM'
-      });
-    }
-    
-    // Volume spike alert
-    if (safeVolumeRatio > 200) {
-      alerts.push({
-        type: 'VOLUME_SPIKE',
-        symbol: stock.symbol,
-        price: stock.price,
-        volumeRatio: safeVolumeRatio,
-        message: `${stock.symbol} - Volume spike (${safeVolumeRatio.toFixed(0)}% of avg)`,
-        timestamp: new Date().toISOString(),
-        priority: 'MEDIUM'
-      });
-    }
-    
-    // Breakout alert
-    if (safeBbPosition > 80 && safeVolumeRatio > 150) {
-      alerts.push({
-        type: 'BREAKOUT',
-        symbol: stock.symbol,
-        price: stock.price,
-        message: `${stock.symbol} - Breakout above upper Bollinger Band with high volume`,
-        timestamp: new Date().toISOString(),
-        priority: 'HIGH'
-      });
-    }
-    
-    // Breakdown alert
-    if (safeBbPosition < 20 && safeVolumeRatio > 150) {
-      alerts.push({
-        type: 'BREAKDOWN',
-        symbol: stock.symbol,
-        price: stock.price,
-        message: `${stock.symbol} - Breakdown below lower Bollinger Band with high volume`,
-        timestamp: new Date().toISOString(),
-        priority: 'HIGH'
-      });
-    }
-    
-    // MACD crossover alert
-    if (stock.macdTrend === 'Bullish' && stock.macdHistogram > 0) {
-      alerts.push({
-        type: 'MACD_CROSSOVER',
-        symbol: stock.symbol,
-        price: stock.price,
-        message: `${stock.symbol} - Bullish MACD crossover`,
-        timestamp: new Date().toISOString(),
-        priority: 'LOW'
-      });
-    }
-  });
-  
-  // Sort by priority and timestamp
-  const priorityOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 };
-  alerts.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
-  
+    const rsi = n(stock.rsi, 50);
+    const vol = n(stock.volumeRatio, 100);
+    const bb = n(stock.bbPosition, 50);
+    const s = stock.symbol || '?';
+
+    if (confidence.score >= 70 && confidence.action === 'BUY')
+      alerts.push({ type: 'BUY', symbol: s, price: stock.price, confidence: confidence.score, message: `${s}: Buy ${confidence.score}%`, timestamp: new Date().toISOString(), priority: 'HIGH' });
+    if (rsi < 30 && vol > 120)
+      alerts.push({ type: 'OVERSOLD_BOUNCE', symbol: s, price: stock.price, rsi, volumeRatio: vol, message: `${s}: Oversold bounce RSI${rsi.toFixed(1)}`, timestamp: new Date().toISOString(), priority: 'MEDIUM' });
+    if (vol > 200)
+      alerts.push({ type: 'VOLUME_SPIKE', symbol: s, price: stock.price, volumeRatio: vol, message: `${s}: Vol spike ${vol.toFixed(0)}%`, timestamp: new Date().toISOString(), priority: 'MEDIUM' });
+    if (bb > 80 && vol > 150)
+      alerts.push({ type: 'BREAKOUT', symbol: s, price: stock.price, message: `${s}: BB breakout`, timestamp: new Date().toISOString(), priority: 'HIGH' });
+    if (bb < 20 && vol > 150)
+      alerts.push({ type: 'BREAKDOWN', symbol: s, price: stock.price, message: `${s}: BB breakdown`, timestamp: new Date().toISOString(), priority: 'HIGH' });
+    if (stock.macdTrend === 'Bullish' && stock.macdHistogram > 0)
+      alerts.push({ type: 'MACD_CROSSOVER', symbol: s, price: stock.price, message: `${s}: MACD crossover`, timestamp: new Date().toISOString(), priority: 'LOW' });
+  }
+
+  const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+  alerts.sort((a, b) => order[a.priority] - order[b.priority]);
   return alerts;
 }
 
-/**
- * Check if service is available
- */
-function isAvailable() {
-  return true;
-}
+function isAvailable() { return true; }
 
-module.exports = {
-  calculateConfidence,
-  generateAlerts,
-  isAvailable
-};
+module.exports = { calculateConfidence, generateAlerts, isAvailable };
