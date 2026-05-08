@@ -16,7 +16,8 @@ function addIndicators(candles) {
   const ema20 = ti.EMA.calculate({ values: closes, period: 20 });
   const ema50 = ti.EMA.calculate({ values: closes, period: 50 });
   const sma20 = ti.SMA.calculate({ values: closes, period: 20 });
-  const volumeAvg = ti.SMA.calculate({ values: volumes, period: 20 });
+  
+    const volumeAvg = ti.SMA.calculate({ values: volumes, period: 20 });
   
   // === RSI (7-period for faster signals) ===
   const rsi = ti.RSI.calculate({ values: closes, period: 7 });
@@ -138,9 +139,15 @@ function addIndicators(candles) {
       bbSignal: getBBSignal(latestClose, bb[bbIndex]),
       
       // Volume
+            // Volume
       volumeAvg: volumeAvg[volIndex] || null,
       volumeRatio: volumeAvg[volIndex] ? (c.volume / volumeAvg[volIndex]) * 100 : 100,
-      volumeSignal: volumeAvg[volIndex] ? (c.volume > volumeAvg[volIndex] * 1.2 ? 'High' : c.volume < volumeAvg[volIndex] * 0.8 ? 'Low' : 'Normal') : 'Normal',
+      volumeSignal: volumeAvg[volIndex] 
+        ? (c.volume > volumeAvg[volIndex] * 1.5 ? 'Very High' : 
+           c.volume > volumeAvg[volIndex] * 1.2 ? 'High' : 
+           c.volume < volumeAvg[volIndex] * 0.5 ? 'Very Low' : 
+           c.volume < volumeAvg[volIndex] * 0.8 ? 'Low' : 'Normal') 
+        : 'Normal',
       
       // ATR
       atr: atr[atrIndex] || null,
