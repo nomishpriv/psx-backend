@@ -19,17 +19,19 @@ const cache = new NodeCache({ stdTTL: 300 }); // 5 minutes cache for intraday da
  */
 async function fetchSymbolTicks(sym) {
   try {
-    const { data } = await axios.get(`https://dps.psx.com.pk/timeseries/int/${sym}`, {
-      timeout: 5000, // Reduced from 8000ms — fail faster
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-        "Referer": "https://dps.psx.com.pk/"
-      }
+    const url = `https://dps.psx.com.pk/timeseries/int/${sym}`;
+    
+    const res = await axios.get(url, {
+      headers: { 
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json"
+      },
+      timeout: 8000
     });
-    return data?.data || [];
+    
+    return res.data.data || [];
   } catch (error) {
-    // Don't log every single timeout — it floods logs
+    console.error(`❌ Error fetching ${sym}:`, error.message);
     return [];
   }
 }
